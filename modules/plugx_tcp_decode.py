@@ -137,101 +137,89 @@ def init(module_data):
 
     return module_options
 
+def decrypt_packed_string(__src):
+    src = __src
+    key = unpack("<I", __src[0:4])[0]
+    if key == 0x54534f50 or key == 0x50545448:
+        return src, 0xffff, ''
+    #chop.tsprnt(hex(key))
+    size = 16
+    stage1 = decrypt(key, src, size)
+    #chop.tsprnt(repr(hex(unpack("<I", stage1[0:4])[0])),repr(hex(unpack("<I",stage1[4:8])[0])),repr(hex(unpack("H",stage1[8:10])[0])),repr(hex(unpack("H",stage1[10:12])[0])))
+    flags = unpack("<I", stage1[4:8])[0]
+    #chop.tsprnt(hex(flags))
+    #chop.tsprnt(repr(stage1[8:10]))
+
+    if flags & 0x2000000:      #do not decrypt payload separately
+        if module_data['verbose']:
+            chop.tsprnt("do not decrypt separately")
+        size = len(src)
+        stage1 = decrypt(key, src, size)
+        # consider removing the verbosity filter here if you're seeing the do not decrypt message and not data.
+        if module_data['verbose']:
+            chop.tsprnt(unpack("H",stage1[8:10])[0])
+    else:
+        size = len(src[16:])
+        src = __src[16:]
+        stage1 = stage1 + decrypt(key, src, size)
+    
+    if flags & 0x1000000:      #do not decompress payload
+        if module_data['verbose']:
+            chop.tsprnt("do not decompress")
+        return stage1, flags, ''
+    else:
+        if flags in module_data['flags'].keys():
+            comp = stage1[16:] 
+            if module_data['verbose']:
+                chop.tsprnt("len of payload: %d   len in header: %d" % (len(comp), unpack("H",stage1[8:10])[0]))
+            if len(comp) == unpack("H",stage1[8:10]):
+                return stage1[:16], flags, comp
+            return stage1[:16], flags, comp[:unpack("H",stage1[8:10])[0]]
+
+        decomp = ''
+        #chop.tsprnt(repr(stage1[:16]),repr(stage1[16:]))
+
+    return stage1[:16]+decomp, flags, ''
+
+def decrypt(key, src, size):
+    key0 = key
+    key1 = key
+    key2 = key
+    key3 = key
+    dst = b''
+    i = 0
+
+    if size > 0:
+        while i < size:
+
+            if module_data['protocol'] == 0:
+                key0 = (key0 + (((key0 >> 3)&0xFFFFFFFF) - 0x11111111)&0xFFFFFFFF)&0xFFFFFFFF
+                key1 = (key1 + (((key1 >> 5)&0xFFFFFFFF) - 0x22222222)&0xFFFFFFFF)&0xFFFFFFFF
+                key2 = (key2 + (0x44444444 - ((key2 << 9)&0xFFFFFFFF))&0xFFFFFFFF)&0xFFFFFFFF
+                key3 = (key3 + (0x33333333 - ((key3 << 7)&0xFFFFFFFF))&0xFFFFFFFF)&0xFFFFFFFF
+                new_key = (((key2&0xFF) + (key3&0xFF) + (key1&0xFF) + (key0&0xFF))&0xFF)
+
+            elif module_data['protocol'] == 1:
+                key0 = (key0 + ((key0 >> 3) + 3)&0xFFFFFFFF)&0xFFFFFFFF
+                key1 = (key1 + (((key1 >> 5)&0xFFFFFFFF) + 5)&0xFFFFFFFF)&0xFFFFFFFF
+                key2 = (0xFFFFFF81 * (key2 & 0xFFFFFFFF)-7)&0xFFFFFFFF
+                key3 = (0xFFFFFE01 * (key3 & 0xFFFFFFFF)-9)&0xFFFFFFFF
+                new_key = (((key2&0xFF) + (key3&0xFF) + (key1&0xFF) + (key0&0xFF))&0xFF)
+
+            else:
+                new_key = 0xFF
+
+            if module_data['verbose']:
+                chop.tsprnt(hex(new_key),hex(key0),hex(key1),hex(key2),hex(key3))
+
+            res = unpack("<B", src[i:i+1])[0] ^ new_key
+            dst = dst + pack("<B", res)
+            i = i + 1
+    
+    return dst
+
+
 def handleStream(tcp):
-    def decrypt_packed_string(__src):
-        global key
-        global src
-        global size
-        src = __src
-        key = unpack("<I", __src[0:4])[0]
-        if key == 0x54534f50 or key == 0x50545448:
-            return src, 0xffff, ''
-        #chop.tsprnt(hex(key))
-        size = 16
-        stage1 = decrypt()
-        #chop.tsprnt(repr(hex(unpack("<I", stage1[0:4])[0])),repr(hex(unpack("<I",stage1[4:8])[0])),repr(hex(unpack("H",stage1[8:10])[0])),repr(hex(unpack("H",stage1[10:12])[0])))
-        flags = unpack("<I", stage1[4:8])[0]
-        #chop.tsprnt(hex(flags))
-        #chop.tsprnt(repr(stage1[8:10]))
-    
-        if flags & 0x2000000:      #do not decrypt payload separately
-            if tcp.module_data['verbose']:
-                chop.tsprnt("do not decrypt separately")
-            size = len(src)
-            stage1 = decrypt()
-            # consider removing the verbosity filter here if you're seeing the do not decrypt message and not data.
-            if tcp.module_data['verbose']:
-                chop.tsprnt(unpack("H",stage1[8:10])[0])
-        else:
-            size = len(src[16:])
-            src = __src[16:]
-            stage1 = stage1 + decrypt()
-        
-        if flags & 0x1000000:      #do not decompress payload
-            if tcp.module_data['verbose']:
-                chop.tsprnt("do not decompress")
-            return stage1, flags, ''
-        else:
-            if flags in module_data['flags'].keys():
-                comp = stage1[16:] 
-                if tcp.module_data['verbose']:
-                    chop.tsprnt("len of payload: %d   len in header: %d" % (len(comp), unpack("H",stage1[8:10])[0]))
-                if len(comp) == unpack("H",stage1[8:10]):
-                    return stage1[:16], flags, comp
-                return stage1[:16], flags, comp[:unpack("H",stage1[8:10])[0]]
-    
-            decomp = ''
-            #chop.tsprnt(repr(stage1[:16]),repr(stage1[16:]))
-    
-        return stage1[:16]+decomp, flags, ''
-    
-    def decrypt():
-        global key
-        global new_key
-        global key0
-        global key1
-        global key2
-        global key3
-        global src
-        global dst
-        global res
-        global i
-        global size
-        key0 = key
-        key1 = key
-        key2 = key
-        key3 = key
-        dst = b''
-        i = 0
-
-        if size > 0:
-            while i < size:
-
-                if tcp.module_data['protocol'] == 0:
-                    key0 = (key0 + (((key0 >> 3)&0xFFFFFFFF) - 0x11111111)&0xFFFFFFFF)&0xFFFFFFFF
-                    key1 = (key1 + (((key1 >> 5)&0xFFFFFFFF) - 0x22222222)&0xFFFFFFFF)&0xFFFFFFFF
-                    key2 = (key2 + (0x44444444 - ((key2 << 9)&0xFFFFFFFF))&0xFFFFFFFF)&0xFFFFFFFF
-                    key3 = (key3 + (0x33333333 - ((key3 << 7)&0xFFFFFFFF))&0xFFFFFFFF)&0xFFFFFFFF
-                    new_key = (((key2&0xFF) + (key3&0xFF) + (key1&0xFF) + (key0&0xFF))&0xFF)
-
-                elif tcp.module_data['protocol'] == 1:
-                    key0 = (key0 + ((key0 >> 3) + 3)&0xFFFFFFFF)&0xFFFFFFFF
-                    key1 = (key1 + (((key1 >> 5)&0xFFFFFFFF) + 5)&0xFFFFFFFF)&0xFFFFFFFF
-                    key2 = (0xFFFFFF81 * (key2 & 0xFFFFFFFF)-7)&0xFFFFFFFF
-                    key3 = (0xFFFFFE01 * (key3 & 0xFFFFFFFF)-9)&0xFFFFFFFF
-                    new_key = (((key2&0xFF) + (key3&0xFF) + (key1&0xFF) + (key0&0xFF))&0xFF)
-
-                else:
-                    new_key = 0xFF
-
-                if tcp.module_data['verbose']:
-                    chop.tsprnt(hex(new_key),hex(key0),hex(key1),hex(key2),hex(key3))
-
-                res = unpack("<B", src[i:i+1])[0] ^ new_key
-                dst = dst + pack("<B", res)
-                i = i + 1
-        
-        return dst
 
     data = ''
 
