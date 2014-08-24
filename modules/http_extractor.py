@@ -34,11 +34,11 @@ def log(cp, msg, level, obj):
     if level == htpy.HTP_LOG_ERROR:
         elog = cp.get_last_error()
         if elog == None:
-            return htpy.HOOK_ERROR
+            return htpy.HTP_ERROR
         chop.prnt("%s:%i - %s (%i)" % (elog['file'], elog['line'], elog['msg'], elog['level']))
     else:
         chop.prnt("%i - %s" % (level, msg))
-    return htpy.HOOK_OK
+    return htpy.HTP_OK
 
 # The request and response body callbacks are treated identical with one
 # exception: the location in the output dictionary where the data is stored.
@@ -55,10 +55,17 @@ def body(data, length, obj, direction):
 
     if length == 0:
         if 'body' not in d[direction]:
-            return htpy.HOOK_OK
+            return htpy.HTP_OK
 
-        dump(obj['module_data'], d)
-        return htpy.HOOK_OK
+        if obj['module_data']['md5_body']:
+            d[direction]['body_md5'] = hashlib.md5(d[direction]['body']).hexdigest()
+            del d[direction]['body']
+
+        # Only dump if direction is 'response', otherwise POST causes
+        # one dump for request and another for response.
+        if direction == 'response':
+            dump(obj['module_data'], d)
+        return htpy.HTP_OK
 
     if 'body' in d[direction]:
         d[direction]['body'] += data
@@ -67,7 +74,7 @@ def body(data, length, obj, direction):
 
     if obj['module_data']['blen'] != 0 and len(d[direction]['body']) >= obj['module_data']['blen']:
         d[direction]['body'] = d[direction]['body'][:obj['module_data']['blen']]
-    return htpy.HOOK_OK
+    return htpy.HTP_OK
 
 def dump(module_data, d):
     if module_data['mongo']:
@@ -119,7 +126,7 @@ def request_headers(cp, obj):
     if not d['request']['headers']:
         del d['request']['headers']
 
-    return htpy.HOOK_OK
+    return htpy.HTP_OK
 
 def response_headers(cp, obj):
     d = obj['d']
@@ -144,7 +151,7 @@ def response_headers(cp, obj):
     # enter teardown.
     if 'blen' not in obj['module_data']:
         dump(obj['module_data'], d)
-    return htpy.HOOK_OK
+    return htpy.HTP_OK
 
 def module_info():
     print "Parse HTTP. Print, generate JSON or send to mongo"
@@ -258,9 +265,6 @@ def handleStream(tcp):
         except htpy.error:
             chop.prnt("Stream error in htpy.")
             tcp.stop()
-        except htpy.error:
-            chop.prnt("Stream error in htpy.")
-            tcp.stop()
         tcp.discard(tcp.server.count_new)
     elif tcp.client.count_new > 0:
         if tcp.module_data['verbose']:
@@ -268,9 +272,6 @@ def handleStream(tcp):
         try:
             tcp.stream_data['cp'].res_data(tcp.client.data[:tcp.client.count_new])
         except htpy.stop:
-            tcp.stop()
-        except htpy.error:
-            chop.prnt("Stream error in htpy.")
             tcp.stop()
         except htpy.error:
             chop.prnt("Stream error in htpy.")
